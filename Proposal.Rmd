@@ -1,0 +1,59 @@
+---
+title: "Project Proposal"
+output: github_document
+---
+
+## Team Member:  
+
+
+**Tentative project title:** 
+Same Diagnosis, Different Bills? Variation in Hospital Charges and Estimated Costs for Five Common Conditions in New York, 2023
+
+## Motivation
+In New York, patients hospitalized for the same condition can receive very different bills depending on where they are treated, and we would like to describe this hospital variation. More recently, there was a lot of media buzz over surprise medical billing and an ongoing debate over hospital price transparency rules. We plan to use 2023 statewide discharge data for five common conditions (heart failure, major respiratory infections, other pneumonia, ischemic stroke, and sepsis) to look at three questions:
+
+(1) Did the typical charges (total amount billed) and estimated costs (the state’s estimate of what the stay cost the hospital) differ significantly across hospitals within each of the five common conditions in 2023?
+
+(2) Does patient case-mix explain the between-hospital gap? This involves analyzing changes in the hospital price gaps after accounting for severity of illness (or other clinical factors), age group, and length of stay in hospitals where these conditions are treated.
+
+(3) Using the each hospital’s median charge (if enough cases exist) as the baseline, are these cost variations stratified by the specific condition (heart failure, major respiratory infections, other pneumonia, ischemic stroke, and sepsis) and hospital?
+
+## Intended final products
+
+* Exploratory data analyses of key variables
+* Statistical report detailing methods & analyses, results, and discussion
+* Webpage and 2-minute screencast describing our project
+
+## Anticipated data sources
+
+*Hospital Inpatient Discharges (SPARCS De-Identified): 2023, New York State Department of Health:
+<https://health.data.ny.gov/Health/Hospital-Inpatient-Discharges-SPARCS-De-Identified/46xm-urtu/about_data>
+
+*Health Facility General Information, New York State Department of Health:
+<https://health.data.ny.gov/d/vn5v-hh5r>
+
+## Planned analyses / visualizations / coding challenges
+
+- **Analyses:** For each condition, we will compare median charges and estimated costs across hospitals, keeping only hospitals that have enough cases (we will pick a cutoff once we look at the data). 
+Then, we will run a regression for each condition to see how much the gaps between hospitals shrink after we account for illness severity, age group, and length of stay. 
+After that, we will check if hospitals that charge a lot for one condition are also expensive for the others, again only looking at hospitals with enough cases in both conditions. 
+If we have time, we might also add bootstrap confidence intervals later on.
+
+- **Visualizations:** Hospital rankings for each condition, a charges vs. costs scatterplot, a heatmap comparing rankings across conditions (with gray cells where a hospital has too few cases), a hospital map, and a plotly dashboard.
+
+- **Coding challenges and limitations:** 
+The full dataset has 2.1 million rows, so we will download only what we need and reuse the same functions for all five conditions. 
+Some columns need cleaning, and hospital IDs must be matched to a second dataset for locations. 
+Charges and costs do not show what patients actually paid, and because the data are observational, we will not make causal claims.
+
+## Timeline
+
+| Date | Milestone |
+|---|---|
+| Nov 13 | Submit proposal |
+| Nov 16–20 | Project review meeting |
+| Nov 23 | Data download and cleaning complete for all five conditions |
+| Nov 30 | Exploratory analysis of hospital gaps and map |
+| Dec 6 | Adjusted models, cross-condition comparison, dashboard draft |
+| Dec 10 | Website and report draft |
+| Dec 12 | Submit report, website, screencast, and peer assessments |
