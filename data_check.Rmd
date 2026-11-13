@@ -1,0 +1,176 @@
+---
+title: "data_check"
+author: "Yimeng Cao"
+date: "2026-11-13"
+output: github_document
+---
+
+
+
+```{r setup, message = FALSE}
+library(tidyverse)
+library(httr)
+
+knitr::opts_chunk$set(
+  fig.width = 6,
+  fig.asp = .6,
+  out.width = "90%"
+)
+
+theme_set(theme_minimal() + theme(legend.position = "bottom"))
+
+options(
+  ggplot2.continuous.colour = "viridis",
+  ggplot2.continuous.fill = "viridis"
+)
+
+scale_colour_discrete = scale_colour_viridis_d
+scale_fill_discrete = scale_fill_viridis_d
+
+# API link for the 2023 SPARCS data, we use this everywhere below
+base_url = "https://health.data.ny.gov/resource/46xm-urtu.csv"
+```
+
+## Explore available diagnosis groups
+
+Data come from the [Hospital Inpatient Discharges (SPARCS De-Identified): 2023](https://health.data.ny.gov/d/46xm-urtu) dataset on Health Data NY.
+
+```{r drg-ranking}
+# grab a few rows just to see what the columns are called
+GET(base_url, query = list("$limit" = "5")) |>
+  content("parsed", col_types = cols(.default = "c")) |>
+  names()
+
+# count how many stays each DRG has
+# (let the API do the counting so we don't download everything)
+drg_list =
+  GET(base_url, query = list(
+    "$select" = "apr_drg_description, count(*) as n",
+    "$group"  = "apr_drg_description",
+    "$order"  = "n DESC",
+    "$limit"  = "400"
+  )) |>
+  content("parsed")
+
+# top 10 most common
+drg_list |> print(n = 10)
+```
+
+## Select diagnosis groups
+
+We selected five of the ten most common APR-DRGs in 2023, one acute medical condition per organ system: heart failure, major respiratory infections, ischemic stroke, sepsis, and kidney and urinary tract infections. Childbirth, newborn, and psychiatric groups were excluded because of their distinct care settings.
+
+```{r drg-selection}
+# our 5 DRGs (names have to match the data exactly, all caps)
+drgs = c(
+  "HEART FAILURE",                                   # heart
+  "MAJOR RESPIRATORY INFECTIONS AND INFLAMMATIONS",  # lungs
+  "CVA AND PRECEREBRAL OCCLUSION WITH INFARCTION",   # brain (stroke)
+  "SEPTICEMIA AND DISSEMINATED INFECTIONS",          # whole body (sepsis)
+  "KIDNEY AND URINARY TRACT INFECTIONS"              # urinary
+)
+
+# turn the list into a filter the API understands, e.g. in('A', 'B', ...)
+where_clause = str_c(
+  "apr_drg_description in(",
+  str_c("'", drgs, "'", collapse = ", "),
+  ")"
+)
+
+# check how many stays and how many hospitals each DRG has
+GET(base_url, query = list(
+  "$select" = "apr_drg_description, count(*) as n, count(distinct permanent_facility_id) as n_hosp",
+  "$where"  = where_clause,
+  "$group"  = "apr_drg_description"
+)) |>
+  content("parsed")
+```
+
+## Download data
+
+```{r download}
+# only download our 5 DRGs (~280k rows instead of ~2 million)
+# read everything as character for now since length_of_stay has "120 +"
+# we'll fix the types when we clean the data
+sparcs_raw =
+  GET(base_url, query = list(
+    "$where" = where_clause,
+    "$limit" = "300000"
+  )) |>
+  content("parsed", col_types = cols(.default = "c")) |>
+  janitor::clean_names()
+
+# should be 282,628
+nrow(sparcs_raw)
+```
+
+## Quick checks
+
+```{r checks}
+# how many stays per DRG (should match the counts above)
+sparcs_raw |> count(apr_drg_description)
+
+# length of stay: any "120 +" values?
+sparcs_raw |> filter(str_detect(length_of_stay, "\\+")) |> count(length_of_stay)
+
+# costs and charges: values have commas like "12,345.67", so use parse_number()
+sparcs_raw |>
+  summarise(
+    bad_cost   = sum(is.na(parse_number(total_costs))),
+    bad_charge = sum(is.na(parse_number(total_charges)))
+  )
+
+# peek at a few raw values
+sparcs_raw |> select(total_costs, total_charges) |> head()
+# severity levels
+sparcs_raw |> count(apr_severity_of_illness_code, apr_severity_of_illness)
+
+# payers (we'll need to group these later)
+sparcs_raw |> count(payment_typology_1, sort = TRUE)
+
+# records with no hospital id (abortion records are blanked out)
+sparcs_raw |> summarise(no_hosp_id = sum(is.na(permanent_facility_id)))
+
+# what's inside the respiratory group? (checking for COVID)
+sparcs_raw |>
+  filter(apr_drg_description == "MAJOR RESPIRATORY INFECTIONS AND INFLAMMATIONS") |>
+  count(ccsr_diagnosis_description, sort = TRUE) |>
+  head(10)
+```
+
+## Hospital info join
+
+```{r hospital-join}
+# hospital info table (ownership, health system, lat/long)
+fac_info =
+  GET("https://health.data.ny.gov/resource/vn5v-hh5r.csv",
+      query = list("$limit" = "50000")) |>
+  content("parsed", col_types = cols(.default = "c")) |>
+  mutate(fac_id = as.numeric(fac_id))
+
+# hospitals in our data
+# SPARCS ids are zero-padded ("000541"), the hospital table isn't ("541"),
+# so turn both into numbers before joining
+sparcs_hosp =
+  sparcs_raw |>
+  filter(!is.na(permanent_facility_id)) |>
+  count(permanent_facility_id, facility_name) |>
+  mutate(permanent_facility_id = as.numeric(permanent_facility_id))
+
+# hospitals that don't match (sorted by number of stays)
+sparcs_hosp |>
+  anti_join(fac_info, by = c("permanent_facility_id" = "fac_id")) |>
+  arrange(desc(n))
+
+# ownership types for the hospitals that do match
+fac_info |>
+  semi_join(sparcs_hosp, by = c("fac_id" = "permanent_facility_id")) |>
+  count(ownership_type, sort = TRUE)
+# some hospitals show up more than once in fac_info -- check which ones
+fac_info |>
+  semi_join(sparcs_hosp, by = c("fac_id" = "permanent_facility_id")) |>
+  count(fac_id) |>
+  filter(n > 1) |>
+  left_join(fac_info, by = "fac_id") |>
+  select(fac_id, facility_name, description, ownership_type)
+```
