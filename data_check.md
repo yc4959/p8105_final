@@ -82,10 +82,11 @@ drg_list =
 
 ``` r
 # top 10 most common
-drg_list |> print(n = 10)
+drg_list |> 
+  head(10)
 ```
 
-    ## # A tibble: 335 × 2
+    ## # A tibble: 10 × 2
     ##    apr_drg_description                                                         n
     ##    <chr>                                                                   <dbl>
     ##  1 NEONATE BIRTH WEIGHT > 2499 GRAMS, NORMAL NEWBORN OR NEONATE WITH OTH… 165929
@@ -98,7 +99,6 @@ drg_list |> print(n = 10)
     ##  8 OTHER PNEUMONIA                                                         29802
     ##  9 SCHIZOPHRENIA                                                           28240
     ## 10 CVA AND PRECEREBRAL OCCLUSION WITH INFARCTION                           26529
-    ## # ℹ 325 more rows
 
 ## Select diagnosis groups
 
@@ -190,7 +190,9 @@ sparcs_raw |> count(apr_drg_description)
 
 ``` r
 # length of stay: any "120 +" values?
-sparcs_raw |> filter(str_detect(length_of_stay, "\\+")) |> count(length_of_stay)
+sparcs_raw |> 
+  filter(str_detect(length_of_stay, "\\+")) |> 
+  count(length_of_stay)
 ```
 
     ## # A tibble: 1 × 2
@@ -214,7 +216,9 @@ sparcs_raw |>
 
 ``` r
 # peek at a few raw values
-sparcs_raw |> select(total_costs, total_charges) |> head()
+sparcs_raw |> 
+  select(total_costs, total_charges) |> 
+  head()
 ```
 
     ## # A tibble: 6 × 2
@@ -242,7 +246,9 @@ sparcs_raw |> count(apr_severity_of_illness_code, apr_severity_of_illness)
 
 ``` r
 # payers (we'll need to group these later)
-sparcs_raw |> count(payment_typology_1, sort = TRUE)
+sparcs_raw |> 
+  count(payment_typology_1) |> 
+  arrange(desc(n))
 ```
 
     ## # A tibble: 9 × 2
@@ -260,7 +266,8 @@ sparcs_raw |> count(payment_typology_1, sort = TRUE)
 
 ``` r
 # records with no hospital id (abortion records are blanked out)
-sparcs_raw |> summarise(no_hosp_id = sum(is.na(permanent_facility_id)))
+sparcs_raw |> 
+  summarise(no_hosp_id = sum(is.na(permanent_facility_id)))
 ```
 
     ## # A tibble: 1 × 1
@@ -272,7 +279,8 @@ sparcs_raw |> summarise(no_hosp_id = sum(is.na(permanent_facility_id)))
 # what's inside the respiratory group? (checking for COVID)
 sparcs_raw |>
   filter(apr_drg_description == "MAJOR RESPIRATORY INFECTIONS AND INFLAMMATIONS") |>
-  count(ccsr_diagnosis_description, sort = TRUE) |>
+  count(ccsr_diagnosis_description) |>
+  arrange(desc(n)) |>
   head(10)
 ```
 
@@ -293,12 +301,14 @@ sparcs_raw |>
 ## Hospital info join
 
 ``` r
-# hospital info table (ownership, health system, lat/long)
+# hospital info table (ownership, lat/long)
+# after check, some hospitals are listed twice, so keep one row per hospital
 fac_info =
   GET("https://health.data.ny.gov/resource/vn5v-hh5r.csv",
       query = list("$limit" = "50000")) |>
   content("parsed", col_types = cols(.default = "c")) |>
-  mutate(fac_id = as.numeric(fac_id))
+  mutate(fac_id = as.numeric(fac_id)) |>
+  distinct(fac_id, .keep_all = TRUE)
 
 # hospitals in our data
 # SPARCS ids are zero-padded ("000541"), the hospital table isn't ("541"),
@@ -328,14 +338,15 @@ sparcs_hosp |>
 ``` r
 # ownership types for the hospitals that do match
 fac_info |>
-  semi_join(sparcs_hosp, by = c("fac_id" = "permanent_facility_id")) |>
-  count(ownership_type, sort = TRUE)
+  filter(fac_id %in% sparcs_hosp$permanent_facility_id) |>
+  count(ownership_type) |>
+  arrange(desc(n))
 ```
 
     ## # A tibble: 5 × 2
     ##   ownership_type                 n
     ##   <chr>                      <int>
-    ## 1 Not for Profit Corporation   180
+    ## 1 Not for Profit Corporation   157
     ## 2 Municipality                  12
     ## 3 Public Benefit Corporation     9
     ## 4 State                          7
@@ -344,24 +355,13 @@ fac_info |>
 ``` r
 # some hospitals show up more than once in fac_info -- check which ones
 fac_info |>
-  semi_join(sparcs_hosp, by = c("fac_id" = "permanent_facility_id")) |>
+  filter(fac_id %in% sparcs_hosp$permanent_facility_id) |>
   count(fac_id) |>
   filter(n > 1) |>
   left_join(fac_info, by = "fac_id") |>
   select(fac_id, facility_name, description, ownership_type)
 ```
 
-    ## # A tibble: 46 × 4
-    ##    fac_id facility_name                  description              ownership_type
-    ##     <dbl> <chr>                          <chr>                    <chr>         
-    ##  1      5 St. Peter's Hospital           Hospital                 Not for Profi…
-    ##  2      5 St. Peter's Hospital           Hospital                 Not for Profi…
-    ##  3     66 Olean General Hospital         Hospital                 Not for Profi…
-    ##  4     66 Olean General Hospital         Hospital                 Not for Profi…
-    ##  5    116 Arnot Ogden Medical Center     Hospital                 Not for Profi…
-    ##  6    116 Arnot Ogden Medical Center     Hospital                 Not for Profi…
-    ##  7    170 Margaretville Hospital         Primary Care Hospital -… Not for Profi…
-    ##  8    170 Margaretville Hospital         Primary Care Hospital -… Not for Profi…
-    ##  9    181 Vassar Brothers Medical Center Hospital                 Not for Profi…
-    ## 10    181 Vassar Brothers Medical Center Hospital                 Not for Profi…
-    ## # ℹ 36 more rows
+    ## # A tibble: 0 × 4
+    ## # ℹ 4 variables: fac_id <dbl>, facility_name <chr>, description <chr>,
+    ## #   ownership_type <chr>
