@@ -39,10 +39,13 @@ In New York, patients hospitalized for the same condition can receive very diffe
 ## Planned analyses / visualizations / coding challenges
 
 - **Analyses:** 
-For each condition, we will compare median charges and estimated costs across hospitals with enough cases (we will pick a cutoff once we look at the data), using bootstrap confidence intervals to show how precise each hospital's median is.
-Then, we will run a regression for each condition to see how much the gaps between hospitals shrink after we account for illness severity, age group, and length of stay.
-We will then use cross-validation to compare models with and without hospital, and models treating length of stay as linear versus piecewise, to see which predicts costs best on held-out data.
-After that, we will check if hospitals that charge a lot for one condition are also expensive for the others, again only looking at hospitals with enough cases in both conditions.
+ * Compare hospital median charges and costs within each condition, with bootstrap confidence intervals.
+ * Use a funnel plot of median cost against case volume to separate real outliers from small-sample noise.
+ * Compute each hospital's charge-to-cost ratio to measure markup.
+ * Fit regressions by condition to see how much hospital gaps shrink after adjusting for severity, age, and length of stay.
+ * Use cross-validation to compare models with and without hospital, and linear vs. piecewise length of stay.
+ * Check whether hospitals expensive for one condition are also expensive for the others.
+
 
 - **Visualizations:** 
 Hospital rankings for each condition, a charges vs. costs scatterplot, a heatmap comparing rankings across conditions (with gray cells where a hospital has too few cases), a hospital map, and a plotly dashboard.
