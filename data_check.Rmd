@@ -142,11 +142,13 @@ sparcs_raw |>
 
 ```{r hospital-join}
 # hospital info table (ownership, health system, lat/long)
+# after check, some hospitals are listed twice, so keep one row per hospital
 fac_info =
   GET("https://health.data.ny.gov/resource/vn5v-hh5r.csv",
       query = list("$limit" = "50000")) |>
   content("parsed", col_types = cols(.default = "c")) |>
-  mutate(fac_id = as.numeric(fac_id))
+  mutate(fac_id = as.numeric(fac_id)) |>
+  distinct(fac_id, .keep_all = TRUE)
 
 # hospitals in our data
 # SPARCS ids are zero-padded ("000541"), the hospital table isn't ("541"),

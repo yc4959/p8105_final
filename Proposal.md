@@ -3,6 +3,9 @@ Project Proposal
 
 ## Team Member:
 
+Yimeng Cao (yc4959), Zeheng Wei (zw3268), Yichuan Ma (ym3197), Jiaxuan
+Su (js7161), Yulin Zhu (yz5458)
+
 **Tentative project title:** Same Diagnosis, Different Bills? Variation
 in Hospital Charges and Estimated Costs for Five Common Conditions in
 New York, 2023
@@ -15,24 +18,18 @@ like to describe this hospital variation. More recently, there was a lot
 of media buzz over surprise medical billing and an ongoing debate over
 hospital price transparency rules. We plan to use 2023 statewide
 discharge data for five common conditions (heart failure, major
-respiratory infections, other pneumonia, ischemic stroke, and sepsis) to
-look at three questions:
+respiratory infections (after check mostly COVID-19), kidney and urinary
+tract infections, ischemic stroke, and sepsis) to look at three
+questions:
 
-1)  Did the typical charges (total amount billed) and estimated costs
-    (the state’s estimate of what the stay cost the hospital) differ
-    significantly across hospitals within each of the five common
-    conditions in 2023?
+1)  How much did median charges and estimated costs vary across
+    hospitals within each of the five conditions in 2023?
 
-2)  Does patient case-mix explain the between-hospital gap? This
-    involves analyzing changes in the hospital price gaps after
-    accounting for severity of illness (or other clinical factors), age
-    group, and length of stay in hospitals where these conditions are
-    treated.
+2)  How much of the between-hospital gap remains after accounting for
+    severity of illness, age group, and length of stay?
 
-3)  Using the each hospital’s median charge (if enough cases exist) as
-    the baseline, are these cost variations stratified by the specific
-    condition (heart failure, major respiratory infections, other
-    pneumonia, ischemic stroke, and sepsis) and hospital?
+3)  Are hospitals that are expensive for one condition also expensive
+    for the others?
 
 ## Intended final products
 
@@ -43,25 +40,27 @@ look at three questions:
 
 ## Anticipated data sources
 
-\*Hospital Inpatient Discharges (SPARCS De-Identified): 2023, New York
-State Department of Health:
-<https://health.data.ny.gov/Health/Hospital-Inpatient-Discharges-SPARCS-De-Identified/46xm-urtu/about_data>
+- Hospital Inpatient Discharges (SPARCS De-Identified): 2023, New York
+  State Department of Health:
+  <https://health.data.ny.gov/Health/Hospital-Inpatient-Discharges-SPARCS-De-Identified/46xm-urtu/about_data>
 
-\*Health Facility General Information, New York State Department of
-Health: <https://health.data.ny.gov/d/vn5v-hh5r>
+- Health Facility General Information, New York State Department of
+  Health: <https://health.data.ny.gov/d/vn5v-hh5r>
 
 ## Planned analyses / visualizations / coding challenges
 
 - **Analyses:** For each condition, we will compare median charges and
-  estimated costs across hospitals, keeping only hospitals that have
-  enough cases (we will pick a cutoff once we look at the data). Then,
-  we will run a regression for each condition to see how much the gaps
-  between hospitals shrink after we account for illness severity, age
-  group, and length of stay. After that, we will check if hospitals that
-  charge a lot for one condition are also expensive for the others,
-  again only looking at hospitals with enough cases in both conditions.
-  If we have time, we might also add bootstrap confidence intervals
-  later on.
+  estimated costs across hospitals with enough cases (we will pick a
+  cutoff once we look at the data), using bootstrap confidence intervals
+  to show how precise each hospital’s median is. Then, we will run a
+  regression for each condition to see how much the gaps between
+  hospitals shrink after we account for illness severity, age group, and
+  length of stay. We will then use cross-validation to compare models
+  with and without hospital, and models treating length of stay as
+  linear versus piecewise, to see which predicts costs best on held-out
+  data. After that, we will check if hospitals that charge a lot for one
+  condition are also expensive for the others, again only looking at
+  hospitals with enough cases in both conditions.
 
 - **Visualizations:** Hospital rankings for each condition, a charges
   vs. costs scatterplot, a heatmap comparing rankings across conditions
