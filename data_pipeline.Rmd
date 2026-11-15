@@ -111,12 +111,12 @@ sparcs_clean =
       "Sepsis"                = "SEPTICEMIA AND DISSEMINATED INFECTIONS",
       "Kidney/UTI"            = "KIDNEY AND URINARY TRACT INFECTIONS"
     ),
-    
-    # remove commas from money and turn "120 +" into 120
+   
+    # parse_number() drops the commas in money; "120 +" becomes 120
+    los_top_coded = length_of_stay == "120 +",
     los     = as.numeric(str_replace(length_of_stay, "120 \\+", "120")),
-    charges = round(as.numeric(str_replace_all(total_charges, ",", "")), 2),
-    costs   = round(as.numeric(str_replace_all(total_costs, ",", "")), 2),
-    
+    charges = parse_number(total_charges),
+    costs   = parse_number(total_costs),
     # severity in order: 1 = Minor ... 4 = Extreme
     severity = fct_relevel(apr_severity_of_illness,
                            "Minor", "Moderate", "Major", "Extreme"),
@@ -144,7 +144,7 @@ sparcs_clean =
     hosp_id, facility_name, hospital_county, hospital_service_area,
     ownership, latitude, longitude,
     condition, severity, age_group, gender, payer,
-    los, charges, costs
+    los, los_top_coded, charges, costs
   )
 ```
 
@@ -185,7 +185,7 @@ write_csv(sparcs_clean, "./data/sparcs_clean.csv")
 ## How to load the clean data
 
 CSV files don't remember factor order, so use this code to read the data in every analysis file:
-```{r load-example}
+```{r load-example, eval = FALSE}
 sparcs_clean =
   read_csv(
     "./data/sparcs_clean.csv",
