@@ -1,0 +1,200 @@
+---
+title: "Data Pipeline"
+output: github_document
+---
+
+```{r setup, message = FALSE}
+library(tidyverse)
+library(httr)
+
+knitr::opts_chunk$set(
+  fig.width = 6,
+  fig.asp = .6,
+  out.width = "90%"
+)
+
+theme_set(theme_minimal() + theme(legend.position = "bottom"))
+
+options(
+  ggplot2.continuous.colour = "viridis",
+  ggplot2.continuous.fill = "viridis"
+)
+
+scale_colour_discrete = scale_colour_viridis_d
+scale_fill_discrete = scale_fill_viridis_d
+```
+
+This file downloads and cleans the data used in every other part of the project. 
+All analyses read the cleaned file `data/sparcs_clean.csv` saved at the end.
+
+## Download discharge data
+
+Data come from the [Hospital Inpatient Discharges (SPARCS De-Identified): 2023](https://health.data.ny.gov/d/46xm-urtu) dataset on Health Data NY. See `data_check.md` for how we picked the five conditions.
+
+```{r download-sparcs}
+base_url = "https://health.data.ny.gov/resource/46xm-urtu.csv"
+
+# our 5 DRGs (names have to match the data exactly)
+drgs = c(
+  "HEART FAILURE",
+  "MAJOR RESPIRATORY INFECTIONS AND INFLAMMATIONS",
+  "CVA AND PRECEREBRAL OCCLUSION WITH INFARCTION",
+  "SEPTICEMIA AND DISSEMINATED INFECTIONS",
+  "KIDNEY AND URINARY TRACT INFECTIONS"
+)
+
+# turn the list into a filter the API understands
+where_clause = str_c(
+  "apr_drg_description in(",
+  str_c("'", drgs, "'", collapse = ", "),
+  ")"
+)
+
+# only download our 5 DRGs, everything as character for now
+sparcs_raw =
+  GET(base_url, query = list(
+    "$where" = where_clause,
+    "$limit" = "300000"
+  )) |>
+  content("parsed", col_types = cols(.default = "c")) |>
+  janitor::clean_names()
+
+# should be 282,628
+nrow(sparcs_raw)
+```
+
+## Download hospital info
+
+Hospital ownership and locations come from the [Health Facility General Information](https://health.data.ny.gov/d/vn5v-hh5r) dataset.
+
+```{r download-hospitals}
+hosp_info =
+  GET("https://health.data.ny.gov/resource/vn5v-hh5r.csv",
+      query = list("$limit" = "50000")) |>
+  content("parsed", col_types = cols(.default = "c")) |>
+  mutate(fac_id = as.numeric(fac_id)) |>
+  # some hospitals are listed twice, keep one row per hospital
+  distinct(fac_id, .keep_all = TRUE) |>
+  # public vs nonprofit (no for-profit hospitals in our data)
+  mutate(
+    ownership = fct_recode(
+      ownership_type,
+      "Nonprofit" = "Not for Profit Corporation",
+      "Public"    = "Municipality",
+      "Public"    = "Public Benefit Corporation",
+      "Public"    = "State",
+      "Public"    = "County"
+    ),
+    latitude = as.numeric(latitude),
+    longitude = as.numeric(longitude)
+  ) |>
+  select(fac_id, ownership, latitude, longitude)
+```
+
+## Clean discharge data
+
+```{r clean}
+sparcs_clean =
+  sparcs_raw |>
+  # drop records with no hospital id 
+  filter(!is.na(permanent_facility_id)) |>
+  mutate(
+    # ids turn into numbers to match hosp_info
+    hosp_id = as.numeric(permanent_facility_id),
+    
+    # short names 
+    condition = fct_recode(
+      apr_drg_description,
+      "Heart failure"         = "HEART FAILURE",
+      "Respiratory infection" = "MAJOR RESPIRATORY INFECTIONS AND INFLAMMATIONS",
+      "Stroke"                = "CVA AND PRECEREBRAL OCCLUSION WITH INFARCTION",
+      "Sepsis"                = "SEPTICEMIA AND DISSEMINATED INFECTIONS",
+      "Kidney/UTI"            = "KIDNEY AND URINARY TRACT INFECTIONS"
+    ),
+    
+    # remove commas from money and turn "120 +" into 120
+    los     = as.numeric(str_replace(length_of_stay, "120 \\+", "120")),
+    charges = round(as.numeric(str_replace_all(total_charges, ",", "")), 2),
+    costs   = round(as.numeric(str_replace_all(total_costs, ",", "")), 2),
+    
+    # severity in order: 1 = Minor ... 4 = Extreme
+    severity = fct_relevel(apr_severity_of_illness,
+                           "Minor", "Moderate", "Major", "Extreme"),
+    
+    # age groups in order
+    age_group = fct_relevel(age_group,
+                            "0 to 17", "18 to 29", "30 to 49", "50 to 69", "70 or Older"),
+    
+    # group the 9 payer types into 4
+    payer = fct_recode(
+      payment_typology_1,
+      "Private" = "Private Health Insurance",
+      "Private" = "Blue Cross/Blue Shield",
+      "Private" = "Managed Care, Unspecified",
+      "Other"   = "Federal/State/Local/VA",
+      "Other"   = "Self-Pay",
+      "Other"   = "Miscellaneous/Other",
+      "Other"   = "Department of Corrections"
+    ),
+    payer = fct_relevel(payer, "Medicare", "Medicaid", "Private", "Other")
+  ) |>
+  # add ownership and location
+  left_join(hosp_info, by = c("hosp_id" = "fac_id")) |>
+  select(
+    hosp_id, facility_name, hospital_county, hospital_service_area,
+    ownership, latitude, longitude,
+    condition, severity, age_group, gender, payer,
+    los, charges, costs
+  )
+```
+
+## Check the cleaned data
+
+```{r check}
+# rows left (282,628 minus 184 with no hospital id)
+nrow(sparcs_clean)
+
+# stays and hospitals per condition
+sparcs_clean |>
+  group_by(condition) |>
+  summarise(n_stays = n(), n_hosp = n_distinct(hosp_id))
+
+# anything missing? (ownership should only be missing for the 6 unmatched hospitals)
+sparcs_clean |>
+  summarise(
+    n_ownership_na = sum(is.na(ownership)),
+    n_latitude_na  = sum(is.na(latitude)),
+    n_charges_na   = sum(is.na(charges)),
+    n_costs_na     = sum(is.na(costs)),
+    n_los_na       = sum(is.na(los))
+  )
+
+# quick look at the main variables
+sparcs_clean |>
+  select(los, charges, costs) |>
+  summary()
+```
+
+## Save
+
+```{r save}
+# everyone reads this file for their analysis
+write_csv(sparcs_clean, "./data/sparcs_clean.csv")
+```
+
+## How to load the clean data
+
+CSV files don't remember factor order, so use this code to read the data in every analysis file:
+```{r load-example}
+sparcs_clean =
+  read_csv(
+    "./data/sparcs_clean.csv",
+    col_types = cols(
+      severity  = col_factor(levels = c("Minor", "Moderate", "Major", "Extreme")),
+      payer     = col_factor(levels = c("Medicare", "Medicaid", "Private", "Other")),
+      ownership = col_factor(levels = c("Nonprofit", "Public")),
+      condition = col_factor(levels = c("Heart failure", "Respiratory infection", "Stroke", "Sepsis", "Kidney/UTI")),
+      age_group = col_factor(levels = c("0 to 17", "18 to 29", "30 to 49", "50 to 69", "70 or Older"))
+    )
+  )
+```
