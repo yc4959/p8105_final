@@ -1,0 +1,41 @@
+Analysis Rules
+================
+
+``` r
+library(tidyverse)
+
+knitr::opts_chunk$set(
+  fig.width = 6,
+  fig.asp = .6,
+  out.width = "90%"
+)
+
+theme_set(theme_minimal() + theme(legend.position = "bottom"))
+
+options(
+  ggplot2.continuous.colour = "viridis",
+  ggplot2.continuous.fill = "viridis"
+)
+
+scale_colour_discrete = scale_colour_viridis_d
+scale_fill_discrete = scale_fill_viridis_d
+```
+
+Before analysis, we need two rules everyone uses: a minimum number of
+stays per hospital, and how to handle unusually low costs.
+
+## Load the clean data
+
+``` r
+sparcs_clean =
+  read_csv(
+    "/Users/moc/Desktop/gr/8105/final/sparcs_clean.csv",
+    col_types = cols(
+      severity  = col_factor(levels = c("Minor", "Moderate", "Major", "Extreme")),
+      payer     = col_factor(levels = c("Medicare", "Medicaid", "Private", "Other")),
+      ownership = col_factor(levels = c("Nonprofit", "Public")),
+      condition = col_factor(),
+      age_group = col_factor(levels = c("0 to 17", "18 to 29", "30 to 49", "50 to 69", "70 or Older"))
+    )
+  )
+```
