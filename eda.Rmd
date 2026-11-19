@@ -1,0 +1,66 @@
+---
+title: "Exploratory Data Analysis"
+output: github_document
+---
+
+```{r setup, message = FALSE}
+library(tidyverse)
+library(ggridges)
+library(patchwork)
+
+knitr::opts_chunk$set(
+  fig.width = 6,
+  fig.asp = .6,
+  out.width = "90%"
+)
+
+theme_set(theme_minimal() + theme(legend.position = "bottom"))
+
+options(
+  ggplot2.continuous.colour = "viridis",
+  ggplot2.continuous.fill = "viridis"
+)
+
+scale_colour_discrete = scale_colour_viridis_d
+scale_fill_discrete = scale_fill_viridis_d
+```
+
+## Load data
+
+```{r load}
+sparcs_clean =
+  read_csv(
+    "./data/sparcs_clean.csv",
+    col_types = cols(
+      condition = col_factor(levels = c("Heart failure", "Respiratory infection", "Stroke", "Sepsis", "Kidney/UTI")),
+      severity  = col_factor(levels = c("Minor", "Moderate", "Major", "Extreme")),
+      age_group = col_factor(levels = c("0 to 17", "18 to 29", "30 to 49", "50 to 69", "70 or Older")),
+      payer     = col_factor(levels = c("Medicare", "Medicaid", "Private", "Other")),
+      ownership = col_factor(levels = c("Nonprofit", "Public"))
+    )
+  )
+
+# apply our rule: drop stays with costs under $500 (too low to be real)
+sparcs_eda =
+  sparcs_clean |>
+  filter(costs >= 500)
+
+# how many we dropped
+nrow(sparcs_clean) - nrow(sparcs_eda)
+```
+
+## Overview
+
+```{r overview}
+# basic numbers for each condition
+sparcs_eda |>
+  group_by(condition) |>
+  summarize(
+    stays          = n(),
+    hospitals      = n_distinct(hosp_id),
+    median_los     = median(los),
+    median_charges = median(charges),
+    median_costs   = median(costs)
+  ) |>
+  knitr::kable(digits = 0, format.args = list(big.mark = ","))
+```
