@@ -20,7 +20,7 @@ This project looks at how much New York hospitals differ in what they charge for
 
 **GitHub Repository:** https://github.com/yc4959/p8105_final
 
-## Key Findings
+## Research Questions
 
 Our analysis answers three questions:
 
