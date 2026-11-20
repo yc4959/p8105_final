@@ -1,0 +1,762 @@
+---
+title: 'Q1: Differences Across Hospitals'
+author: "Yichuan Ma"
+date: "2026-11-16"
+output: html_document
+---
+
+
+# 1. Data source and eligibility
+We used the cleaned 2023 New York SPARCS discharge data for heart failure, respiratory infection, stroke, sepsis, and kidney/urinary tract infection. Following the shared analysis rules, we excluded stays with estimated costs below $500 and retained stays where charges were lower than estimated costs. Main comparisons included hospitals with at least 30 remaining stays per condition. Funnel plots and the exported hospital-level dataset included hospitals of all volumes after the cost exclusion.
+```{r}
+set.seed(8105)
+library(tidyverse)
+
+knitr::opts_chunk$set(
+  fig.width = 8,
+  fig.height = 5,
+  out.width = "100%"
+)
+
+theme_set(theme_minimal())
+
+sparcs_clean =
+  read_csv(
+    "data/sparcs_clean.csv",
+    col_types = cols(
+      condition = col_factor(levels = c(
+        "Heart failure", "Respiratory infection", "Stroke",
+        "Sepsis", "Kidney/UTI"
+      )),
+      ownership = col_factor(levels = c("Nonprofit", "Public"))
+    )
+  )
+```
+
+# 2. Hospital-level summaries
+We calculated eligible stay counts, median charges, and median estimated costs for each hospital-condition combination. We flagged combinations with at least 30 eligible stays as having enough cases for the main comparisons. We retained hospital names, ownership, and geographic information and classified hospitals as NYC or Rest of state based on hospital service area.
+```{r}
+q1_stays =
+  sparcs_clean |>
+  filter(costs >= 500)
+
+hospital_info =
+  q1_stays |>
+  select(
+    hosp_id,
+    facility_name,
+    hospital_service_area,
+    ownership,
+    latitude,
+    longitude
+  ) |>
+  distinct()
+
+hospital_medians_all =
+  q1_stays |>
+  group_by(condition, hosp_id) |>
+  summarize(
+    n_stays = n(),
+    n_charges = sum(!is.na(charges)),
+    n_costs = sum(!is.na(costs)),
+    median_charge = median(charges, na.rm = TRUE),
+    median_cost = median(costs, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  left_join(hospital_info, by = "hosp_id") |>
+  mutate(
+    enough_cases = n_stays >= 30,
+    region = if_else(
+      hospital_service_area == "New York City",
+      "NYC",
+      "Rest of state"
+    ),
+    markup_ratio = median_charge / median_cost
+  )
+
+hospital_medians =
+  hospital_medians_all |>
+  filter(enough_cases)
+
+hospital_medians_all |>
+  count(condition, enough_cases, name = "n_hospitals") |>
+  knitr::kable()
+```
+
+# 3. Compare the 90th and 10th percentiles
+Within each condition, we calculated the 10th and 90th percentiles of hospital median charges and estimated costs among hospitals with at least 30 eligible stays. Each hospital contributed one median per measure. We divided the 90th percentile by the 10th percentile to obtain the P90/P10 ratio. A larger ratio indicates greater relative variation across hospitals.
+
+```{r}
+q1_gaps =
+  hospital_medians |>
+  group_by(condition) |>
+  summarize(
+    n_hospitals = n(),
+    charge_p10 = quantile(median_charge, 0.10, na.rm = TRUE),
+    charge_p90 = quantile(median_charge, 0.90, na.rm = TRUE),
+    cost_p10 = quantile(median_cost, 0.10, na.rm = TRUE),
+    cost_p90 = quantile(median_cost, 0.90, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(
+    charge_p90_p10 = if_else(
+  charge_p10 == 0,
+  NA_real_,
+  charge_p90 / charge_p10
+),
+    cost_p90_p10 = cost_p90 / cost_p10
+  )
+
+q1_gaps |>
+  select(
+    condition, n_hospitals,
+    charge_p10, charge_p90, charge_p90_p10,
+    cost_p10, cost_p90, cost_p90_p10
+  ) |>
+  knitr::kable(digits = 2)
+
+```
+
+
+
+# 4. Bootstrap confidence intervals and hospital rankings
+We estimated 95% confidence intervals for hospital medians using 1,000 bootstrap samples. Within each eligible hospital-condition combination, we sampled stays with replacement and recalculated the median charge and estimated cost. Confidence limits were the 2.5th and 97.5th percentiles of the bootstrap medians. Hospitals were ranked separately within each condition and measure. Combinations with fewer than 30 eligible stays were excluded from rankings and received NA values in the exported confidence interval columns.
+```{r}
+bootstrap_medians = function(amount) {
+  map_dbl(
+    1:1000,
+    function(i) {
+      median(
+        sample(
+          amount,
+          size = length(amount),
+          replace = TRUE
+        )
+      )
+    }
+  )
+}
+
+hospital_ci =
+  q1_stays |>
+  inner_join(
+    hospital_medians |>
+      select(condition, hosp_id),
+    by = c("condition", "hosp_id")
+  ) |>
+  pivot_longer(
+    cols = c(charges, costs),
+    names_to = "measure",
+    values_to = "amount"
+  ) |>
+  drop_na(amount) |>
+  group_by(condition, hosp_id, measure) |>
+  summarize(
+    boot_medians = list(bootstrap_medians(amount)),
+    .groups = "drop"
+  ) |>
+  mutate(
+    lower = map_dbl(
+      boot_medians,
+      function(x) quantile(x, 0.025)
+    ),
+    upper = map_dbl(
+      boot_medians,
+      function(x) quantile(x, 0.975)
+    )
+  ) |>
+  select(-boot_medians)
+
+```
+
+
+```{r ranking-plot, fig.width = 10, fig.height = 15, fig.asp = NULL}
+hospital_rankings =
+  hospital_medians |>
+  select(
+    condition,
+    hosp_id,
+    charges = median_charge,
+    costs = median_cost
+  ) |>
+  pivot_longer(
+    cols = c(charges, costs),
+    names_to = "measure",
+    values_to = "hospital_median"
+  ) |>
+  left_join(
+    hospital_ci,
+    by = c("condition", "hosp_id", "measure")
+  ) |>
+  drop_na(hospital_median) |>
+  group_by(condition, measure) |>
+  arrange(hospital_median, hosp_id, .by_group = TRUE) |>
+  mutate(hospital_rank = row_number()) |>
+  ungroup()
+
+hospital_rankings |>
+  ggplot(
+    aes(
+      x = hospital_rank,
+      y = hospital_median,
+      colour = measure
+    )
+  ) +
+  geom_linerange(
+    aes(ymin = lower, ymax = upper),
+    alpha = 0.35,
+    linewidth = 0.3
+  ) +
+  geom_point(size = 0.8) +
+  facet_wrap(
+    vars(condition, measure),
+    ncol = 2,
+    scales = "free_y",
+    labeller = labeller(
+      measure = c(
+        charges = "Billed charges",
+        costs = "Estimated costs"
+      )
+    )
+  ) +
+  scale_colour_manual(
+    values = c(
+      charges = "#1D4E89",
+      costs = "#12806A"
+    ),
+    guide = "none"
+  ) +
+  scale_y_continuous(
+    labels = scales::label_dollar(
+      scale = 0.001,
+      suffix = "k",
+      accuracy = 1
+    ),
+    breaks = scales::breaks_pretty(n = 4)
+  ) +
+  labs(
+    title = "Hospital charges and estimated costs by condition",
+    subtitle = "Points show hospital medians. Vertical lines show 95% bootstrap confidence intervals.",
+    x = "Hospital rank within each panel",
+    y = "Median amount per stay",
+    caption = "Includes hospitals with at least 30 eligible stays per condition."
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    plot.title = element_text(
+      face = "bold",
+      size = 14
+    ),
+    plot.subtitle = element_text(
+      colour = "grey35",
+      size = 9
+    ),
+    strip.text = element_text(
+      face = "bold",
+      size = 10,
+      margin = margin(b = 6)
+    ),
+    axis.text = element_text(size = 8),
+    axis.title = element_text(size = 10),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.spacing = grid::unit(1, "lines"),
+    plot.caption = element_text(
+      colour = "grey40",
+      size = 8,
+      hjust = 0
+    )
+  )
+```
+
+# 5. Funnel plots
+We plotted hospital median charges and estimated costs against eligible stay counts, including hospitals of all volumes. Within each condition and measure, we sampled n stays with replacement from the pooled eligible stays, calculated the median, and repeated this process 1,000 times for each hospital volume. The 2.5th and 97.5th percentiles defined the 95% reference limits. We classified hospital medians as Above, Within, or Below these limits and counted hospitals in each category. The exported funnel limits and classifications refer to estimated costs. These comparisons were unadjusted for patient case-mix.
+
+```{r funnel-plot, fig.width = 10, fig.height = 15, fig.asp = NULL}
+
+# Draw pooled stays with replacement and calculate the median.
+  simulate_medians = function(amounts, sample_size) {
+  map_dbl(
+    1:1000,
+    function(i) {
+      sampled_rows = sample(
+        1:length(amounts),
+        size = sample_size,
+        replace = TRUE
+      )
+
+      median(amounts[sampled_rows])
+    }
+  )
+}
+
+# Pool stays within each condition and measure.
+funnel_reference =
+  q1_stays |>
+  pivot_longer(
+    cols = c(charges, costs),
+    names_to = "measure",
+    values_to = "amount"
+  ) |>
+  drop_na(amount) |>
+  group_by(condition, measure) |>
+  summarize(
+    pooled_amounts = list(amount),
+    center = median(amount),
+    .groups = "drop"
+  )
+
+# Include hospitals of every volume.
+funnel_hospitals =
+  hospital_medians_all |>
+  select(
+    condition,
+    hosp_id,
+    n = n_stays,
+    median_charges = median_charge,
+    median_costs = median_cost
+  ) |>
+  pivot_longer(
+    cols = c(median_charges, median_costs),
+    names_to = "measure",
+    names_prefix = "median_",
+    values_to = "median"
+  )
+
+# Calculate limits at each observed hospital volume.
+funnel_limits =
+  funnel_hospitals |>
+  distinct(condition, measure, n) |>
+  left_join(
+    funnel_reference,
+    by = c("condition", "measure")
+  ) |>
+  mutate(
+    simulated_medians = map2(
+      pooled_amounts,
+      n,
+      \(amounts, size) simulate_medians(amounts, size)
+    ),
+    lower = map_dbl(
+      simulated_medians,
+      \(x) quantile(x, 0.025)
+    ),
+    upper = map_dbl(
+      simulated_medians,
+      \(x) quantile(x, 0.975)
+    )
+  ) |>
+  select(condition, measure, n, lower, upper)
+
+funnel_classifications =
+  funnel_hospitals |>
+  left_join(
+    funnel_limits,
+    by = c("condition", "measure", "n")
+  ) |>
+  mutate(
+    funnel = case_when(
+      is.na(median) ~ NA_character_,
+      median > upper ~ "Above",
+      median < lower ~ "Below",
+      TRUE ~ "Within"
+    )
+  )
+
+funnel_counts =
+  funnel_classifications |>
+  count(
+    condition,
+    measure,
+    funnel,
+    name = "n_hospitals"
+  ) |>
+  complete(
+    condition,
+    measure,
+    funnel = c("Above", "Within", "Below"),
+    fill = list(n_hospitals = 0)
+  )
+
+funnel_counts |>
+  knitr::kable()
+
+ggplot(funnel_hospitals, aes(x = n, y = median)) +
+  geom_hline(
+    data = funnel_reference,
+    aes(yintercept = center),
+    colour = "grey40",
+    linewidth = 0.4
+  ) +
+  geom_line(
+    data = funnel_limits,
+    aes(y = lower),
+    colour = "grey55",
+    linetype = "dashed",
+    linewidth = 0.4
+  ) +
+  geom_line(
+    data = funnel_limits,
+    aes(y = upper),
+    colour = "grey55",
+    linetype = "dashed",
+    linewidth = 0.4
+  ) +
+  geom_point(
+    aes(colour = measure),
+    size = 1.2,
+    alpha = 0.6
+  ) +
+  facet_wrap(
+    vars(condition, measure),
+    ncol = 2,
+    scales = "free_y",
+    labeller = labeller(
+      measure = c(
+        charges = "Billed charges",
+        costs = "Estimated costs"
+      )
+    )
+  ) +
+  scale_colour_manual(
+    values = c(
+      charges = "#1D4E89",
+      costs = "#12806A"
+    ),
+    guide = "none"
+  ) +
+  scale_x_log10(
+    breaks = c(1, 10, 100, 1000, 10000),
+    labels = scales::label_comma()
+  ) +
+  scale_y_continuous(
+    trans = scales::pseudo_log_trans(
+      sigma = 1000,
+      base = 10
+    ),
+    breaks = c(0, 1000, 10000, 100000, 1000000, 10000000),
+    labels = scales::label_dollar(
+      scale = 0.001,
+      suffix = "k",
+      accuracy = 1
+    ),
+    minor_breaks = NULL
+  ) +
+  labs(
+    title = "Hospital medians and hospital volume",
+    subtitle = "Dashed lines show simulated 95% reference limits.",
+    x = "Eligible stays (log scale)",
+    y = "Median amount per stay (pseudo-log scale)",
+    caption = paste(
+      "Solid lines show pooled medians. All hospital volumes included.",
+      "Reference limits are unadjusted for patient characteristics.",
+      sep = "\n"
+    )
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    plot.title = element_text(
+      face = "bold",
+      size = 14
+    ),
+    plot.subtitle = element_text(
+      colour = "grey35",
+      size = 9
+    ),
+    strip.text = element_text(
+      face = "bold",
+      size = 10,
+      margin = margin(b = 6)
+    ),
+    axis.text = element_text(size = 8),
+    axis.title = element_text(size = 10),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.spacing = grid::unit(1, "lines"),
+    plot.caption = element_text(
+      colour = "grey40",
+      size = 8,
+      hjust = 0
+    )
+  )
+```
+
+
+# 6. Hospital charges and estimated costs
+We used scatterplots to examine the relationship between hospital median charges and median estimated costs within each condition. Each point represents a hospital with at least 30 eligible stays. We calculated Spearman correlations to summarize whether hospitals with higher median estimated costs also tended to have higher median charges.
+
+```{r spearman}
+charge_cost_pairs =
+  hospital_medians |>
+  drop_na(median_charge, median_cost)
+
+spearman_results =
+  charge_cost_pairs |>
+  group_by(condition) |>
+  summarize(
+    n_hospitals = n(),
+    spearman_rho = cor(
+      median_charge,
+      median_cost,
+      method = "spearman"
+    ),
+    .groups = "drop"
+  )
+
+spearman_results |>
+  knitr::kable(
+    digits = 3,
+    col.names = c("Condition", "Hospitals", "Spearman rho")
+  )
+```
+
+```{r charge-cost-plot, fig.width = 10, fig.height = 7}
+charge_cost_pairs |>
+  ggplot(aes(x = median_cost, y = median_charge)) +
+  geom_point(colour = "#1D4E89", alpha = 0.65, size = 1.8) +
+  facet_wrap(vars(condition), ncol = 3, scales = "free") +
+  scale_x_continuous(
+    labels = scales::label_dollar(scale = 0.001, suffix = "k")
+  ) +
+  scale_y_continuous(
+    labels = scales::label_dollar(scale = 0.001, suffix = "k")
+  ) +
+  labs(
+    title = "Hospital charges versus estimated costs",
+    x = "Hospital median estimated cost",
+    y = "Hospital median charge",
+    caption = "Each point represents a hospital with at least 30 eligible stays for the condition."
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    strip.text = element_text(face = "bold"),
+    panel.grid.minor = element_blank(),
+    panel.spacing = grid::unit(1, "lines"),
+    plot.caption = element_text(colour = "grey40", hjust = 0)
+  )
+```
+
+# 7. Markup ratios
+For each hospital-condition combination, we defined markup as median charges divided by median estimated costs. Among combinations with at least 30 eligible stays, we summarized the lowest and highest ratios within each condition and calculated median markup by region and ownership. We also identified the 10 highest and 10 lowest markup ratios within each condition, retaining ties at the cutoff. Missing ownership categories were labeled “Unknown” in these summaries. Markup is a ratio of hospital-level medians and differs from the median of individual stay-level charge-to-cost ratios.
+```{r markup-summaries}
+markup_data =
+  hospital_medians |>
+  filter(is.finite(markup_ratio)) |>
+  mutate(
+    ownership = if_else(
+      is.na(ownership),
+      "Unknown",
+      as.character(ownership)
+    )
+  )
+
+markup_overall =
+  markup_data |>
+  group_by(condition) |>
+  summarize(
+    n_hospitals = n(),
+    lowest_markup = min(markup_ratio),
+    highest_markup = max(markup_ratio),
+    .groups = "drop"
+  )
+
+markup_overall |>
+  knitr::kable(digits = 2)
+
+markup_by_region_ownership =
+  markup_data |>
+  group_by(condition, region, ownership) |>
+  summarize(
+    n_hospitals = n(),
+    median_markup = median(markup_ratio),
+    .groups = "drop"
+  )
+
+markup_by_region_ownership |>
+  knitr::kable(digits = 2)
+```
+
+```{r markup-top-bottom}
+markup_rankings =
+  markup_data |>
+  group_by(condition) |>
+  mutate(
+    highest_rank = min_rank(desc(markup_ratio)),
+    lowest_rank = min_rank(markup_ratio)
+  ) |>
+  ungroup()
+
+# Highest 10 within each condition, including ties.
+markup_rankings |>
+  filter(highest_rank <= 10) |>
+  arrange(condition, highest_rank) |>
+  select(
+    condition, facility_name, n_stays,
+    region, ownership, markup_ratio
+  ) |>
+  knitr::kable(digits = 2)
+
+# Lowest 10 within each condition, including ties.
+markup_rankings |>
+  filter(lowest_rank <= 10) |>
+  arrange(condition, lowest_rank) |>
+  select(
+    condition, facility_name, n_stays,
+    region, ownership, markup_ratio
+  ) |>
+  knitr::kable(digits = 2)
+```
+
+
+
+
+
+
+
+
+
+
+# 8. Export hospital results
+We saved all hospital-condition combinations to data/hospital_medians.csv using the agreed column names and order. The file includes eligible stay counts, median charges and estimated costs, the enough_cases flag, bootstrap confidence limits, cost-based funnel reference limits and classifications, ownership, region, geographic coordinates, and markup. Combinations with fewer than 30 eligible stays remain in the file with NA values in the bootstrap confidence interval columns.
+
+```{r export-hospital-medians}
+hospital_ci_wide =
+  hospital_ci |>
+  pivot_wider(
+    names_from = measure,
+    values_from = c(lower, upper)
+  ) |>
+  rename(
+    charges_ci_lower = lower_charges,
+    charges_ci_upper = upper_charges,
+    costs_ci_lower = lower_costs,
+    costs_ci_upper = upper_costs
+  )
+
+cost_funnel =
+  funnel_classifications |>
+  filter(measure == "costs") |>
+  select(
+    condition,
+    hosp_id,
+    funnel_lower = lower,
+    funnel_upper = upper,
+    funnel
+  )
+
+hospital_results =
+  hospital_medians_all |>
+  left_join(
+    hospital_ci_wide,
+    by = c("condition", "hosp_id")
+  ) |>
+  left_join(
+    cost_funnel,
+    by = c("condition", "hosp_id")
+  ) |>
+  select(
+    condition,
+    hosp_id,
+    facility_name,
+    n = n_stays,
+    median_charges = median_charge,
+    median_costs = median_cost,
+    enough_cases,
+    charges_ci_lower,
+    charges_ci_upper,
+    costs_ci_lower,
+    costs_ci_upper,
+    funnel_lower,
+    funnel_upper,
+    funnel,
+    ownership,
+    region,
+    latitude,
+    longitude,
+    markup = markup_ratio
+  )
+
+write_csv(
+  hospital_results,
+  "data/hospital_medians.csv"
+)
+
+names(hospital_results)
+
+hospital_results |>
+  count(enough_cases)
+```
+
+
+```{r}
+
+```
+
+# 9. Summary of findings
+
+Hospital median charges and estimated costs varied substantially within each condition. Between 126 and 164 hospitals met the minimum requirement of 30 eligible stays per condition. The P90/P10 ratio ranged from 4.66 to 5.81 for hospital median charges and from 3.57 to 4.31 for hospital median estimated costs. Charges showed greater relative variation than estimated costs across all five conditions. Sepsis had the highest charge P90/P10 ratio (5.81), closely followed by heart failure (5.79). Hospital median charges and estimated costs were positively associated, with Spearman correlations ranging from 0.673 for respiratory infection to 0.792 for sepsis. Among hospital-condition combinations with at least 30 eligible stays, markup ratios ranged from 0.70 to 10.20. Funnel plots compared hospital medians with simulated reference limits based on hospital volume. These analyses were unadjusted for patient severity, age, and length of stay, so differences in patient case-mix may explain part of the observed variation. Billed charges and estimated hospital costs do not measure patients’ actual payments.
+
+
+# Numbers for QC
+We report the number of stays remaining after the cost exclusion, the number of hospitals with at least 30 eligible stays per condition, charge and cost P90/P10 ratios, and Spearman correlations. We also report the three highest- and lowest-charge hospitals for heart failure, including their eligible stay counts and median charges, and the highest and lowest markup ratios among eligible hospital-condition combinations. Ties are retained in the heart failure rankings.
+```{r}
+# Number of stays after the cost rule.
+tibble(
+  rows_after_rule_1 = nrow(q1_stays)
+) |>
+  knitr::kable()
+
+# Hospitals meeting the 30-stay threshold.
+hospital_medians |>
+  count(condition, name = "n_hospitals") |>
+  knitr::kable()
+
+# P90/P10 ratios.
+q1_gaps |>
+  select(
+    condition,
+    charge_p90_p10,
+    cost_p90_p10
+  ) |>
+  knitr::kable(digits = 3)
+
+# Spearman correlations.
+spearman_results |>
+  knitr::kable(digits = 3)
+
+# Heart failure: three highest and three lowest charge ranks.
+hospital_medians |>
+  filter(condition == "Heart failure") |>
+  mutate(
+    highest_rank = min_rank(desc(median_charge)),
+    lowest_rank = min_rank(median_charge)
+  ) |>
+  filter(highest_rank <= 3 | lowest_rank <= 3) |>
+  arrange(median_charge) |>
+  select(
+    hosp_id,
+    facility_name,
+    n_stays,
+    median_charge,
+    highest_rank,
+    lowest_rank
+  ) |>
+  knitr::kable(digits = 2)
+
+# Highest and lowest markup across eligible hospital-condition pairs.
+markup_data |>
+  filter(
+    markup_ratio == max(markup_ratio) |
+      markup_ratio == min(markup_ratio)
+  ) |>
+  arrange(markup_ratio) |>
+  select(
+    condition,
+    hosp_id,
+    facility_name,
+    n_stays,
+    markup_ratio
+  ) |>
+  knitr::kable(digits = 3)
+```
