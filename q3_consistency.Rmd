@@ -1,0 +1,176 @@
+---
+title: "Hospital rankings across conditions"
+author: "Jiaxuan Su"
+output: html_document
+---
+
+```{r q3-setup, include=FALSE}
+library(tidyverse)
+
+knitr::opts_chunk$set(echo = FALSE, message = FALSE)
+theme_set(theme_minimal())
+set.seed(8105)
+
+medians = read_csv("data/hospital_medians.csv", show_col_types = FALSE)
+
+eligible = medians |>
+  filter(enough_cases)
+
+conditions = unique(eligible$condition)
+
+values = eligible |>
+  select(
+    hosp_id, condition,
+    Charges = median_charges,
+    Costs = median_costs,
+    Markup = markup
+  ) |>
+  pivot_longer(
+    Charges:Markup,
+    names_to = "measure",
+    values_to = "value"
+  )
+```
+
+## Do hospitals rank similarly across conditions?
+
+For each pair of conditions, we included hospitals with at least 30 eligible stays for both conditions. We compared hospital median charges, median estimated costs, and markup. Markup is the median charge divided by the median cost.
+
+```{r q3-pairs}
+rank_stats = function(x, y) {
+  spearman = function(a, b) cor(a, b, method = "spearman")
+
+  boot = replicate(1000, {
+    i = sample.int(length(x), replace = TRUE)
+    spearman(x[i], y[i])
+  })
+
+  shuffled = replicate(1000, spearman(x, sample(y)))
+
+  tibble(
+    hospitals = length(x),
+    rho = spearman(x, y),
+    low = quantile(boot, 0.025),
+    high = quantile(boot, 0.975),
+    null_low = quantile(shuffled, 0.025),
+    null_high = quantile(shuffled, 0.975)
+  )
+}
+
+compare_pair = function(pair) {
+  values |>
+    filter(condition %in% pair) |>
+    pivot_wider(names_from = condition, values_from = value) |>
+    drop_na(all_of(pair)) |>
+    group_by(measure) |>
+    group_modify(~ rank_stats(.x[[pair[1]]], .x[[pair[2]]])) |>
+    ungroup() |>
+    mutate(first = pair[1], second = pair[2])
+}
+
+pairs = map_dfr(
+  combn(conditions, 2, simplify = FALSE),
+  compare_pair
+)
+
+pair_table = function(metric) {
+  pairs |>
+    filter(measure == metric) |>
+    transmute(
+      Conditions = paste(first, second, sep = " / "),
+      Hospitals = hospitals,
+      Correlation = round(rho, 3),
+      `95% CI` = sprintf("%.3f to %.3f", low, high),
+      `Shuffled range` = sprintf("%.3f to %.3f", null_low, null_high)
+    ) |>
+    knitr::kable()
+}
+
+charge_pairs = pairs |> filter(measure == "Charges")
+```
+
+Charge correlations ranged from `r sprintf("%.3f", min(charge_pairs$rho))` to `r sprintf("%.3f", max(charge_pairs$rho))`. Hospitals that charged more for one condition also tended to charge more for the others. We resampled hospitals 1,000 times to estimate each 95% confidence interval. The shuffled range shows the middle 95% of correlations after randomly matching hospitals 1,000 times.
+
+## Pairwise results {.tabset}
+
+### Charges
+
+```{r q3-charges}
+pair_table("Charges")
+```
+
+### Costs
+
+```{r q3-costs}
+pair_table("Costs")
+```
+
+### Markup
+
+```{r q3-markup}
+pair_table("Markup")
+```
+
+## Hospital rankings
+
+```{r q3-ranks}
+ranks = eligible |>
+  group_by(condition) |>
+  mutate(pct = 100 * percent_rank(median_charges)) |>
+  ungroup() |>
+  select(hosp_id, facility_name, condition, pct)
+
+scores = ranks |>
+  group_by(hosp_id, facility_name) |>
+  summarize(
+    n_conditions = n(),
+    mean_pct = mean(pct),
+    .groups = "drop"
+  )
+
+heat = ranks |>
+  complete(nesting(hosp_id, facility_name), condition) |>
+  left_join(scores, by = c("hosp_id", "facility_name")) |>
+  mutate(
+    hospital = fct_reorder(factor(hosp_id), mean_pct),
+    coverage = if_else(n_conditions == 5, "All five", "Fewer than five")
+  )
+```
+
+Each row is a hospital. Yellow indicates higher charges within a condition. Gray means the hospital had fewer than 30 eligible stays for that condition, including zero.
+
+```{r q3-heatmap, fig.width=8, fig.height=7}
+ggplot(heat, aes(condition, hospital, fill = pct)) +
+  geom_tile() +
+  facet_grid(coverage ~ ., scales = "free_y", space = "free_y") +
+  scale_fill_viridis_c(limits = c(0, 100), na.value = "grey85") +
+  labs(x = NULL, y = "Hospitals", fill = "Charge percentile") +
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text.x = element_text(angle = 25, hjust = 1)
+  )
+```
+
+The table ranks the `r sum(scores$n_conditions == 5)` hospitals with enough cases for all five conditions. Each condition contributes equally to the average charge percentile.
+
+```{r q3-top-bottom}
+complete_hospitals = scores |>
+  filter(n_conditions == 5)
+
+high = complete_hospitals |>
+  arrange(desc(mean_pct), hosp_id) |>
+  slice_head(n = 10)
+
+low = complete_hospitals |>
+  arrange(mean_pct, hosp_id) |>
+  slice_head(n = 10)
+
+tibble(
+  "Highest charges" = high$facility_name,
+  "Mean percentile (high)" = high$mean_pct,
+  "Lowest charges" = low$facility_name,
+  "Mean percentile (low)" = low$mean_pct
+) |>
+  knitr::kable(digits = 1)
+```

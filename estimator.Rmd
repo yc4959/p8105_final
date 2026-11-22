@@ -1,0 +1,61 @@
+---
+title: "Hospital charge estimator"
+author: "Jiaxuan Su"
+output: html_document
+---
+
+```{r estimator-setup, include=FALSE}
+library(tidyverse)
+
+knitr::opts_chunk$set(echo = FALSE, message = FALSE)
+
+sparcs_clean = read_csv(
+  "data/sparcs_clean.csv",
+  col_types = cols(
+    condition = col_factor(levels = c(
+      "Heart failure", "Respiratory infection", "Stroke", "Sepsis", "Kidney/UTI"
+    )),
+    severity = col_factor(levels = c(
+      "Minor", "Moderate", "Major", "Extreme"
+    )),
+    age_group = col_factor(levels = c(
+      "0 to 17", "18 to 29", "30 to 49", "50 to 69", "70 or Older"
+    )),
+    payer = col_factor(levels = c("Medicare", "Medicaid", "Private", "Other")),
+    ownership = col_factor(levels = c("Nonprofit", "Public"))
+  )
+)
+
+eligible_keys = read_csv(
+  "data/hospital_medians.csv",
+  show_col_types = FALSE
+) |>
+  filter(enough_cases) |>
+  select(condition, hosp_id)
+
+stays = sparcs_clean |>
+  filter(costs >= 500) |>
+  semi_join(eligible_keys, by = c("condition", "hosp_id"))
+```
+
+## Typical patient profiles
+
+For each condition, we used the most common age group and severity combination. We used the median length of stay among all eligible stays for that condition.
+
+```{r estimator-profiles}
+days = stays |>
+  group_by(condition) |>
+  summarize(days = median(los), .groups = "drop")
+
+profiles = stays |>
+  count(condition, age_group, severity, sort = TRUE) |>
+  group_by(condition) |>
+  slice_head(n = 1) |>
+  ungroup() |>
+  select(-n) |>
+  left_join(days, by = "condition") |>
+  arrange(condition)
+
+profiles |>
+  knitr::kable(col.names = c("Condition", "Age group", "Severity", "Days"))
+```
